@@ -18,23 +18,23 @@ import java.util.concurrent.TimeUnit;
 public class SendFile {
     public static void main(String[] args) {
 
+        CloudEventBuilder eventTemplate = CloudEventBuilder.v1()
+                .withSource(URI.create("https://github.com/linkall-labs/vance/connectors/sendfile"))
+                .withDataContentType("application/json")
+                .withType("simulation client");
+        CloudEvent event = eventTemplate
+                .withId(UUID.randomUUID().toString())
+                .withExtension("objectkey","abcd.txt")
+                .withData("plain/text", GenericFileUtil.readResource("abcd.txt").getBytes(StandardCharsets.UTF_8))
+                .build();
 
-        ScheduledExecutorService threadPool = Executors.newScheduledThreadPool(10);
+        ScheduledExecutorService threadPool = Executors.newScheduledThreadPool(100);
         threadPool.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
-                CloudEventBuilder eventTemplate = CloudEventBuilder.v1()
-                        .withSource(URI.create("https://github.com/linkall-labs/vance/connectors/sendfile"))
-                        .withDataContentType("application/json")
-                        .withType("simulation client");
-                CloudEvent event = eventTemplate
-                        .withId(UUID.randomUUID().toString())
-                        .withExtension("objectkey","abcd.txt")
-                        .withData("plain/text", GenericFileUtil.readResource("abcd.txt").getBytes(StandardCharsets.UTF_8))
-                        .build();
                 HttpClient.deliver(event);
             }
-        }, 5L, 3000L, TimeUnit.MILLISECONDS);
+        }, 15000L, 100L, TimeUnit.MILLISECONDS);
 
     }
 }

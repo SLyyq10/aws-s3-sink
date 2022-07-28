@@ -26,10 +26,10 @@ public class S3Sink implements Sink {
     private static final Logger LOGGER = LoggerFactory.getLogger(S3Sink.class);
     private static final AtomicInteger eventNum = new AtomicInteger(0);
     private static final DecimalFormat decimalFormat = new DecimalFormat("0000000");
-    private File jsonFile;
+    private static final DecimalFormat dateFormat = new DecimalFormat("00");
     private LocalDateTime fileCreateTime;
     private OffsetDateTime pathCreateTime;
-    private int fileIdx = 1;
+    private static final AtomicInteger fileIdx = new AtomicInteger(1);
     private static final AtomicInteger fileSize = new AtomicInteger(0);
     private String pathName;
     private String timeIntervalUnit;
@@ -50,14 +50,15 @@ public class S3Sink implements Sink {
             scheduledInterval = Long.parseLong(ConfigUtil.getString("scheduledInterval"));
         }
 
+        //crate path for file to be upload
         pathCreateTime = getZeroTime(LocalDateTime.now());
         timeIntervalUnit = ConfigUtil.getString("timeInterval");
         if(timeIntervalUnit.equals("HOURLY")){
-            pathName = pathCreateTime.getYear()+"/"+pathCreateTime.getMonthValue()+"/"
-                    +pathCreateTime.getDayOfMonth()+"/"+pathCreateTime.getHour()+"/";
+            pathName = pathCreateTime.getYear()+"/"+dateFormat.format(pathCreateTime.getMonthValue())+"/"
+                    +dateFormat.format(pathCreateTime.getDayOfMonth())+"/"+dateFormat.format(pathCreateTime.getHour())+"/";
         }else if(timeIntervalUnit.equals("DAILY")){
-            pathName = pathCreateTime.getYear()+"/"+pathCreateTime.getMonthValue()+"/"
-                    +pathCreateTime.getDayOfMonth()+"/"+pathCreateTime.getHour()+"/";
+            pathName = pathCreateTime.getYear()+"/"+dateFormat.format(pathCreateTime.getMonthValue())+"/"
+                    +dateFormat.format(pathCreateTime.getDayOfMonth())+"/";
         }
 
         Region region = Region.of(strRegion);
@@ -67,9 +68,6 @@ public class S3Sink implements Sink {
 
         HttpServer server = HttpServer.createHttpServer();
 
-        //create jsonFile
-        String jsonFileName = "eventing-"+decimalFormat.format(fileIdx);
-        jsonFile = new File(jsonFileName);
         fileCreateTime = LocalDateTime.now();
 
 
@@ -78,28 +76,14 @@ public class S3Sink implements Sink {
         threadPool.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
-                //check pathName
-                pathCreateTime = getZeroTime(LocalDateTime.now());
-                String newPathNameDaily = pathCreateTime.getYear()+"/"+pathCreateTime.getMonthValue()+"/"
-                        +pathCreateTime.getDayOfMonth()+"/";
-                if(timeIntervalUnit.equals("HOURLY")){
-                    if(!pathName.equals(newPathNameDaily+pathCreateTime.getHour()+"/")){
-                        fileIdx = 1;
-                    }
-                    pathName = newPathNameDaily + pathCreateTime.getHour() + "/";
-                }else if(timeIntervalUnit.equals("DAILY")){
-                    if(!pathName.equals(newPathNameDaily)){
-                        fileIdx = 1;
-                    }
-                    pathName = newPathNameDaily;
-                }
+                pathName = checkAndGetPathName();
                 long duration = Duration.between(fileCreateTime, LocalDateTime.now()).getSeconds();
-                if((fileSize.intValue() >= flushSize || duration >= scheduledInterval)){
-                    if(null != jsonFile && jsonFile.length() != 0){
-                        int uploadFileIdx = fileIdx;
-                        File uploadFile = jsonFile;
-                        fileIdx++;
-                        jsonFile = new File("eventing-"+decimalFormat.format(fileIdx));
+                if((fileSize.get() >= flushSize || duration >= scheduledInterval)){
+                    File uploadFile = new File("eventing-"+decimalFormat.format(fileIdx.get()));
+                    if(null != uploadFile && uploadFile.length() != 0){
+                        int uploadFileIdx = fileIdx.get();
+                        fileSize.getAndSet(0);
+                        fileIdx.getAndAdd(1);
                         boolean putOk = S3Util.putS3Object(s3,bucketName,
                                 pathName+"eventing-"+decimalFormat.format(uploadFileIdx), uploadFile);
                         try {
@@ -108,11 +92,10 @@ public class S3Sink implements Sink {
                             e.printStackTrace();
                         }
                         if(putOk){
-                            LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(fileIdx) + "> completed");
+                            LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(uploadFileIdx) + "> completed");
                         }else{
-                            LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(fileIdx) + "> failed");
+                            LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(uploadFileIdx) + "> failed");
                         }
-                        fileSize.getAndSet(0);
                     }else{
                         LOGGER.info("invalid data format, upload failed");
                     }
@@ -128,6 +111,8 @@ public class S3Sink implements Sink {
 
             JsonObject js = JsonMapper.wrapCloudEvent(event);
 
+            File jsonFile = new File("eventing-"+decimalFormat.format(fileIdx.get()));
+
             try (BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(jsonFile, true)))){
                 bw.write(js.toString());
                 bw.write("\r\n");
@@ -139,21 +124,8 @@ public class S3Sink implements Sink {
         server.listen();
 
         Runtime.getRuntime().addShutdownHook(new Thread(()->{
-            //check pathName
-            pathCreateTime = getZeroTime(LocalDateTime.now());
-            String newPathNameDaily = pathCreateTime.getYear()+"/"+pathCreateTime.getMonthValue()+"/"
-                    +pathCreateTime.getDayOfMonth()+"/";
-            if(timeIntervalUnit.equals("HOURLY")){
-                if(!pathName.equals(newPathNameDaily+pathCreateTime.getHour()+"/")){
-                    fileIdx = 1;
-                }
-                pathName = newPathNameDaily + pathCreateTime.getHour() + "/";
-            }else if(timeIntervalUnit.equals("DAILY")){
-                if(!pathName.equals(newPathNameDaily)){
-                    fileIdx = 1;
-                }
-                pathName = newPathNameDaily;
-            }
+            pathName = checkAndGetPathName();
+            File jsonFile = new File("eventing-"+decimalFormat.format(fileIdx));
             if(jsonFile != null && jsonFile.length() != 0){
                 boolean putOk = S3Util.putS3Object(s3,bucketName,
                         pathName+"eventing-"+decimalFormat.format(fileIdx), jsonFile);
@@ -163,9 +135,9 @@ public class S3Sink implements Sink {
                     e.printStackTrace();
                 }
                 if(putOk){
-                    LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(fileIdx) + "> completed");
+                    LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(fileIdx.get()) + "> completed");
                 }else{
-                    LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(fileIdx) + "> failed");
+                    LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(fileIdx.get()) + "> failed");
                 }
             }else{
                 LOGGER.error("invalid data format");
@@ -179,6 +151,27 @@ public class S3Sink implements Sink {
         Duration duration = Duration.between(time, dt);
         OffsetDateTime time2 = OffsetDateTime.of(time, ZoneOffset.UTC).plus(duration);
         return time2;
+    }
+
+    private String checkAndGetPathName(){
+        String pathName = this.pathName;
+        pathCreateTime = getZeroTime(LocalDateTime.now());
+        String newPathNameDaily = pathCreateTime.getYear()+"/"+dateFormat.format(pathCreateTime.getMonthValue())+"/"
+                +dateFormat.format(pathCreateTime.getDayOfMonth())+"/";
+        if(timeIntervalUnit.equals("HOURLY")){
+            if(!pathName.equals(newPathNameDaily+dateFormat.format(pathCreateTime.getHour())+"/")){
+                fileIdx.getAndSet(1);
+                fileSize.getAndSet(0);
+            }
+            pathName = newPathNameDaily + dateFormat.format(pathCreateTime.getHour()) + "/";
+        }else if(timeIntervalUnit.equals("DAILY")){
+            if(!pathName.equals(newPathNameDaily)){
+                fileIdx.getAndSet(1);
+                fileSize.getAndSet(0);
+            }
+            pathName = newPathNameDaily;
+        }
+        return pathName;
     }
 
 }

@@ -2,8 +2,8 @@
   "region": "us-west-2",
   "v_port": "8080",
   "v_target": "http://127.0.0.1:8080",
-  "bucketName": "s3-notify-test-bucket",
-  "flushSize": "15",
+  "bucketName": "${bucketName}",
+  "flushSize": "60",
   "scheduledInterval": "120",
   "timeInterval": "HOURLY"
 }
