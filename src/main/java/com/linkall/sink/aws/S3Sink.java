@@ -35,11 +35,13 @@ public class S3Sink implements Sink {
     private String timeIntervalUnit;
     private int flushSize = 1000;
     private long scheduledInterval = 30;
+    private S3Client s3;
 
     @Override
     public void start(){
         AwsHelper.checkCredentials();
 
+        //read config
         String strRegion = ConfigUtil.getString("region");
         String bucketName = ConfigUtil.getString("bucketName");
 
@@ -63,7 +65,7 @@ public class S3Sink implements Sink {
 
         Region region = Region.of(strRegion);
         // get S3Client
-        S3Client s3 = Objects.requireNonNull(
+        s3 = Objects.requireNonNull(
                 S3Client.builder().region(region).build());
 
         HttpServer server = HttpServer.createHttpServer();
@@ -79,27 +81,7 @@ public class S3Sink implements Sink {
                 pathName = checkAndGetPathName();
                 long duration = Duration.between(fileCreateTime, LocalDateTime.now()).getSeconds();
                 if((fileSize.get() >= flushSize || duration >= scheduledInterval)){
-                    File uploadFile = new File("eventing-"+decimalFormat.format(fileIdx.get()));
-                    if(null != uploadFile && uploadFile.length() != 0){
-                        int uploadFileIdx = fileIdx.get();
-                        fileSize.getAndSet(0);
-                        fileIdx.getAndAdd(1);
-                        boolean putOk = S3Util.putS3Object(s3,bucketName,
-                                pathName+"eventing-"+decimalFormat.format(uploadFileIdx), uploadFile);
-                        try {
-                            Files.deleteIfExists(Paths.get("eventing-"+decimalFormat.format(uploadFileIdx) ));
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
-                        if(putOk){
-                            LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(uploadFileIdx) + "> completed");
-                        }else{
-                            LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(uploadFileIdx) + "> failed");
-                        }
-                    }else{
-                        LOGGER.info("invalid data format, upload failed");
-                    }
-                    fileCreateTime = LocalDateTime.now();
+                    uploadFile(bucketName);
                 }
             }
         }, 0L, 1L, TimeUnit.SECONDS);
@@ -125,23 +107,7 @@ public class S3Sink implements Sink {
 
         Runtime.getRuntime().addShutdownHook(new Thread(()->{
             pathName = checkAndGetPathName();
-            File jsonFile = new File("eventing-"+decimalFormat.format(fileIdx));
-            if(jsonFile != null && jsonFile.length() != 0){
-                boolean putOk = S3Util.putS3Object(s3,bucketName,
-                        pathName+"eventing-"+decimalFormat.format(fileIdx), jsonFile);
-                try {
-                    Files.deleteIfExists(Paths.get("eventing-"+decimalFormat.format(fileIdx)));
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-                if(putOk){
-                    LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(fileIdx.get()) + "> completed");
-                }else{
-                    LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(fileIdx.get()) + "> failed");
-                }
-            }else{
-                LOGGER.error("invalid data format");
-            }
+            uploadFile(bucketName);
             System.out.println("shut down");
         }));
     }
@@ -172,6 +138,30 @@ public class S3Sink implements Sink {
             pathName = newPathNameDaily;
         }
         return pathName;
+    }
+
+    private void uploadFile(String bucketName){
+        File uploadFile = new File("eventing-"+decimalFormat.format(fileIdx.get()));
+        if(null != uploadFile && uploadFile.length() != 0){
+            int uploadFileIdx = fileIdx.get();
+            fileSize.getAndSet(0);
+            fileIdx.getAndAdd(1);
+            boolean putOk = S3Util.putS3Object(s3,bucketName,
+                    pathName+"eventing-"+decimalFormat.format(uploadFileIdx), uploadFile);
+            try {
+                Files.deleteIfExists(Paths.get("eventing-"+decimalFormat.format(uploadFileIdx) ));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            if(putOk){
+                LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(uploadFileIdx) + "> completed");
+            }else{
+                LOGGER.info("[upload file <" + "eventing-"+decimalFormat.format(uploadFileIdx) + "> failed");
+            }
+        }else{
+            LOGGER.info("invalid data format, upload failed");
+        }
+        fileCreateTime = LocalDateTime.now();
     }
 
 }
